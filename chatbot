@@ -1,0 +1,94 @@
+import streamlit as st
+import numpy as np
+import tensorflow as tf
+from tensorflow.keras import layers, activations, models, preprocessing, utils
+import pandas as pd
+import os
+import zipfile
+import re
+from gensim.models import Word2Vec
+
+# Function to tokenize sentences
+def tokenize(sentences):
+    tokens_list = []
+    vocabulary = []
+    for sentence in sentences:
+        sentence = sentence.lower()
+        sentence = re.sub('[^a-zA-Z]', ' ', sentence)
+        tokens = sentence.split()
+        vocabulary += tokens
+        tokens_list.append(tokens)
+    return tokens_list, vocabulary
+
+# Function to create inference models
+def make_inference_models(encoder_inputs, encoder_states, decoder_inputs, decoder_embedding, decoder_lstm, decoder_dense):
+    encoder_model = tf.keras.models.Model(encoder_inputs, encoder_states)
+
+    decoder_state_input_h = tf.keras.layers.Input(shape=(200,))
+    decoder_state_input_c = tf.keras.layers.Input(shape=(200,))
+
+    decoder_states_inputs = [decoder_state_input_h, decoder_state_input_c]
+
+    decoder_outputs, state_h, state_c = decoder_lstm(
+        decoder_embedding, initial_state=decoder_states_inputs)
+    decoder_states = [state_h, state_c]
+    decoder_outputs = decoder_dense(decoder_outputs)
+    decoder_model = tf.keras.models.Model(
+        [decoder_inputs] + decoder_states_inputs,
+        [decoder_outputs] + decoder_states)
+
+    return encoder_model, decoder_model
+
+# Function to convert string to tokens
+def str_to_tokens(sentence, tokenizer, maxlen):
+    words = sentence.lower().split()
+    tokens_list = []
+    for word in words:
+        tokens_list.append(tokenizer.word_index.get(word, tokenizer.word_index.get('<UNK>', 1)))
+    return preprocessing.sequence.pad_sequences([tokens_list], maxlen=maxlen, padding='post')
+
+# Load the trained model
+model = tf.keras.models.load_model('model.h5')
+
+# Create Streamlit app
+def main():
+    st.title('Chatbot App')
+
+    # Define user input field
+    user_input = st.text_input('You:', '')
+
+    # Define button to send user message
+    if st.button('Send'):
+        # Tokenize user input
+        tokenized_user_input = tokenizer.texts_to_sequences([user_input])
+        padded_user_input = preprocessing.sequence.pad_sequences(tokenized_user_input, maxlen=maxlen_questions, padding='post')
+        
+        # Make predictions using the model
+        states_values = encoder_model.predict(padded_user_input)
+        empty_target_seq = np.zeros((1, 1))
+        empty_target_seq[0, 0] = tokenizer.word_index['<START>']
+        stop_condition = False
+        decoded_translation = ''
+        
+        while not stop_condition:
+            dec_outputs, h, c = decoder_model.predict([empty_target_seq] + states_values)
+            sampled_word_index = np.argmax(dec_outputs[0, -1, :])
+            sampled_word = None
+            
+            for word, index in tokenizer.word_index.items():
+                if sampled_word_index == index:
+                    decoded_translation += ' {}'.format(word)
+                    sampled_word = word
+            
+            if sampled_word == '<END>' or len(decoded_translation.split()) > maxlen_answers:
+                stop_condition = True
+            
+            empty_target_seq = np.zeros((1, 1))
+            empty_target_seq[0, 0] = sampled_word_index
+            states_values = [h, c]
+        
+        # Display chatbot response
+        st.text('Bot:' + decoded_translation)
+
+if __name__ == '__main__':
+    main()
